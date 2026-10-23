@@ -9,11 +9,11 @@ Kräver **Docker Desktop** och **Node 22.18+** (`node -v`).
 ### Sätt 1: allt i Docker
 
 ```bash
-docker compose up --build -d          # postgres, mongo, api (:4000) och client (:3001)
+docker compose up --build -d          # postgres, mongo, api och client (nginx på :3001)
 docker compose exec api npm run seed  # första gången: testdata i Postgres
 ```
 
-Klienten: http://localhost:3001 · API: http://localhost:4000/api/health (ska svara `"postgres":"ok","mongodb":"ok"`).
+Klienten: http://localhost:3001 · API (genom nginx): http://localhost:3001/api/health (ska svara `"postgres":"ok","mongodb":"ok"`).
 Logga in med valfri seedad användare, lösenord `hemligt123` (e-postadresserna syns i `docker compose exec postgres psql -U utpost -c 'select email from users'`).
 
 Stoppa med `docker compose down`. Lägg till `-v` för att även kasta databasernas data.
@@ -32,8 +32,8 @@ npm run dev:client                    # Vue-klienten på :3001 med hot reload
 
 ## Struktur
 
-- `api/` – Express + Postgres (Drizzle) + MongoDB (driver). REST under `/api`, GraphQL på `/graphql` (`api/src/graphql/`, GraphiQL i browsern på http://localhost:4000/graphql). Kräver Node 22.18+ (routes skrivs i TypeScript och körs direkt av Node). `api/Dockerfile` byggs från repots rot.
-- `client/` – ny klient i Vue 3 + TypeScript (port 3001). `client/Dockerfile` bygger och serverar `dist/` (multi-stage kommer i M4).
+- `api/` – Express + Postgres (Drizzle) + MongoDB (driver). REST under `/api`, GraphQL på `/graphql` (`api/src/graphql/`, GraphiQL i browsern på http://localhost:3001/graphql). Kräver Node 22.18+ (routes skrivs i TypeScript och körs direkt av Node). `api/Dockerfile` byggs från repots rot.
+- `client/` – ny klient i Vue 3 + TypeScript (port 3001). `client/Dockerfile` är multi-stage: Node bygger `dist/`, nginx skickar ut den och skickar `/api` och `/graphql` vidare till `api:4000` (`client/nginx.conf`).
 - `shared/` – API-kontraktet som TypeScript-typer (`@utpost/shared`), används av `api/` och `client/`.
 - `web/` – den gamla React-klienten. Portas vy för vy till `client/`, tas bort i M6.
 - `compose.yaml` – hela miljön. `docs/decisions/` – teamets beslutsdokument.
@@ -47,6 +47,24 @@ npm run dev:client                    # Vue-klienten på :3001 med hot reload
     npm test                  # Vitest, en gång, avslutar
     npm run build             # vite build av client/
     npm run mongo:smoke [id]  # skriver en tur ur Postgres som ett dokument i MongoDB och läser tillbaka
+
+## Images
+
+`client/Dockerfile` är multi-stage (M4). Mätt med `docker image ls` (DISK USAGE):
+
+| Image | Före (en stage, Node + node_modules) | Efter (multi-stage, nginx + dist) |
+| --- | --- | --- |
+| `utpost-…-client` | 534 MB | 76 MB |
+| `utpost-…-api` | 330 MB | 330 MB (oförändrad, en stage) |
+
+API:et har ingen publicerad port i `compose.yaml` – browsern når det bara genom nginx i client.
+
+CI-jobbet **Image** bygger båda imagerna på varje PR (utan publicering) och publicerar dem till GHCR vid push till `main`:
+
+- `ghcr.io/mirko143-spec/utpost-graphql-miran-api`
+- `ghcr.io/mirko143-spec/utpost-graphql-miran-client`
+
+Taggar: `sha-<7 tecken>` (commiten imagen byggdes av – flyttar sig aldrig) och `latest` (senaste på main).
 
 ## Deploy
 
